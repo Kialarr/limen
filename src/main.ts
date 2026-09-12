@@ -6,6 +6,7 @@ import { jobsCommand } from "./commands/jobs.ts";
 import { linearCommand } from "./commands/linear.ts";
 import { openCommand } from "./commands/open.ts";
 import { pruneCommand } from "./commands/prune.ts";
+import { releaseCommand } from "./commands/release.ts";
 import { spawnCommand } from "./commands/spawn.ts";
 import { steerCommand } from "./commands/steer.ts";
 import { stopCommand } from "./commands/stop.ts";
@@ -28,6 +29,7 @@ const COMMANDS = {
 	wait: waitCommand,
 	jobs: jobsCommand,
 	prune: pruneCommand,
+	release: releaseCommand,
 	watch: watchCommand,
 	unwatch: unwatchCommand,
 	open: openCommand,
@@ -45,6 +47,7 @@ const COMMANDS = {
 	| "stop"
 	| "wait"
 	| "jobs"
+	| "release"
 	| "prune"
 	| "watch"
 	| "unwatch"
@@ -75,6 +78,8 @@ usage:
   limen stop <id|suffix|label> [reason]
   limen jobs [--running|--active|--all|<id|suffix|label>]
   limen prune
+  limen spawn --workspace existing --claim RESOURCE --detached "…"  # exclusive existing checkout; repeat --claim as needed
+  limen release <id|suffix|label>                    # release claims only after verified process settlement
   limen watch <id|suffix|label> | --running
   limen unwatch <id|suffix|label> | --all
   limen open <id|suffix|label>

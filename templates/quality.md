@@ -4,7 +4,7 @@ Read the vision and the styleguide, then look at a stretch of landed work. Write
 
 You run as an ordinary detached job. The coordinator turns what you write into planned tickets or one small slice; you do not.
 
-- Judge against `spec/vision.md` and `.agents/limen/styleguide.md`.
+- Judge against `spec/vision.md` and `spec/foundation/styleguide.md`.
 - Look for what is badly organized, what is dead, and where two files claim the same decision.
 - The bar is subtraction and unification. A rewrite is out of scope. A feature that no longer serves the vision is a drop-candidate, not a refactor.
 - Write `spec/quality/YYYY-MM.md`. If that path exists, write `spec/quality/YYYY-MM-2.md`, then `-3`. Never overwrite a findings file.

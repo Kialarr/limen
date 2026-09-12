@@ -54,6 +54,8 @@ export async function continueCommand(args: readonly string[], cwd: string): Pro
 
 	const root = workspaceRoot(cwd) ?? repoRoot(cwd);
 	const { id: parentId, jobDir: parentDir } = await resolveJob(cwd, query);
+	if (existsSync(`${parentDir}/claims.json`) || (await text(`${parentDir}/workspace`)) === "existing")
+		throw new Error("claimed jobs require explicit release and a fresh spawn; continue cannot reacquire ownership");
 	const parentState = await text(`${parentDir}/state`);
 	if (!["done", "failed", "stopped"].includes(parentState)) throw new Error(`job ${parentId} is ${parentState || "stateless"}; continue needs a finished job`);
 	const worktree = await text(`${parentDir}/worktree`);

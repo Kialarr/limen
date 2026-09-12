@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readdir, readFile, realpath, rm } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { limenRoot, listWorktrees, pruneWorktrees, removeWorktree, workspaceRepository } from "../git.ts";
@@ -22,6 +23,11 @@ export async function pruneFinishedWorktrees(root: string, keep: readonly string
 	for (const entry of entries) {
 		if (!entry.isDirectory()) continue;
 		const jobDir = `${jobsRoot}/${entry.name}`;
+		if ((await text(`${jobDir}/workspace`)) === "existing" || (existsSync(`${jobDir}/claims.json`) && !existsSync(`${jobDir}/claims-released`))) {
+			const recorded = await text(`${jobDir}/worktree`);
+			if (recorded) keepPaths.add(await resolved(recorded));
+			continue;
+		}
 		if (!(await text(`${jobDir}/state`))) {
 			await rm(jobDir, { recursive: true, force: true });
 			removed += 1;

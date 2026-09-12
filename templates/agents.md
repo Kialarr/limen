@@ -5,7 +5,7 @@ This repository uses plain specifications, Git, and `limen` to coordinate one hu
 ## Durable intent
 
 - `spec/vision.md` explains durable intent. It is human-owned: propose a change and ask before rewriting it. Keep compact, decision-useful bullets under **Product principles** and **Current direction**. The coordinator holds it in the system prompt; a worker is pointed at the file.
-- `.agents/limen/styleguide.md` defines concise, durable coding practice. Keep it compact and bullet-led; read it before writing or modifying specifications and keep it in context while modifying files. It governs how code is written and organized here, never product scope or speech.
+- `spec/foundation/styleguide.md` defines concise, durable coding practice. Keep it compact and bullet-led; read it before writing or modifying specifications and keep it in context while modifying files. It governs how code is written and organized here, never product scope or speech. Existing projects may use `.agents/limen/styleguide.md` only while the Foundation styleguide is absent. Preserve existing Foundation guidance, notes and research; follow the vision’s links to read only the guidance relevant to the assignment.
 - Speech registers live in the installed Limen package. A project file at `.agents/limen/communication.md` replaces that default for this repository only.
 - `spec/build.md` is the coordinator-maintained TRACK / NOW / NEXT / PROVEN board. Before selecting, starting, resuming, reviewing, merging, proving, or dropping work, reconcile it with the planned and active feature folders. Update it in the same coherent change that changes feature state. Each drift advisory never blocks work. Status marks are 🟠 ACTIVE, 🔴 PLANNED, 🟢 PROVEN, ⚪ DROPPED.
 - `spec/features/` is a numbered filing cabinet:
@@ -18,7 +18,7 @@ This repository uses plain specifications, Git, and `limen` to coordinate one hu
 - These lanes and dates organize human history only. Nothing parses them as workflow state, validates moves, or blocks work. `spec/build.md` is a concise TRACK / NOW / NEXT / PROVEN view, not an authoritative projection.
 - A project with a `spec/linear.md` (operator config naming a Linear team and project) mirrors feature state changes to Linear. The filesystem stays truth; conventions and rituals live in the installed package's `templates/linear.md`, replaced by a project file at `.agents/limen/linear.md`. Without `spec/linear.md`, Linear does not exist for this project.
 
-A useful ticket states the outcome, scope, out-of-scope work, and observable acceptance in about three hundred words; the speech register's Specs section says what earns a line and what never belongs. Write enough context for one worker to execute without hand-holding: direction and a starting seam, not an edit list. Escalate genuine product ambiguity to the human as a clear question; a blocked worker is not itself a product decision.
+A useful ticket states the outcome, scope, out-of-scope work, and observable acceptance in a flexible body sized to the work; the speech register's Specs section says what earns a line and what never belongs. Write enough context for one worker to execute without hand-holding: direction and a starting seam, not an edit list. Escalate genuine product ambiguity to the human as a clear question; a blocked worker is not itself a product decision.
 
 ## Policy precedence
 

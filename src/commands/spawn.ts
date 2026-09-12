@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { acquireClaims, captureCandidate, currentBranch } from "../claims.ts";
 import { signalProcessGroup, waitForProcessGroup } from "../contain.ts";
 import { finishWebhookEnv } from "../finish-webhook.ts";
 import {
@@ -41,6 +42,8 @@ type SpawnOptions = {
 	detached: boolean;
 	role?: string;
 	engine?: string;
+	workspace?: "existing";
+	claims: string[];
 };
 const PACKAGE_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 export function resolvePreamble(root: string, role: string): string {
@@ -75,6 +78,9 @@ export async function spawnCommand(args: readonly string[], cwd: string): Promis
 	if (tab && parsed.timeoutMs) throw new Error("hosted jobs have no timeout; omit --timeout or use --detached");
 	if (tab && parsed.engine === "claude") throw new Error("a claude job has no interactive tab; pass --detached");
 	if (tab && !herdr) throw new Error("hosted spawn requires Herdr (HERDR_ENV=1); use --detached for an ordinary job");
+	if (tab && (parsed.workspace || parsed.claims.length)) throw new Error("existing workspace and shared claims require --detached; hosted settlement is not verified");
+	if ((parsed.workspace || parsed.claims.length) && (parsed.prepare || process.env.LIMEN_PREPARE?.trim()))
+		throw new Error("claimed jobs cannot run --prepare or LIMEN_PREPARE; prepare the shared workspace before claiming it");
 	const loaded = await readSpawnTask(parsed.task, parsed.taskFile, cwd);
 	const options = { ...parsed, tab, task: loaded.text, label: parsed.label ?? (loaded.text.trim().split(/\r?\n/, 1)[0]?.trim().slice(0, 80) || "job") };
 	const engine = options.engine ?? "pi";
@@ -104,30 +110,40 @@ export async function spawnCommand(args: readonly string[], cwd: string): Promis
 	if (running > 0) console.log(`note: ${running} job${running === 1 ? "" : "s"} already running; starting another`);
 	if (/^F\d{3,}$/i.test(options.label)) console.log("warning: label is only a feature number");
 	if (held) console.log("warning: a live job already holds this label");
-	const branch = options.branch ?? `limen/${id}`;
+	const branch = options.workspace ? currentBranch(repository) : (options.branch ?? `limen/${id}`);
+	if (options.workspace && options.branch && options.branch !== branch) throw new Error("--workspace existing cannot switch branches; --branch must match the current branch");
 	const worktreeRoot = `${dirname(repository)}/.${basename(repository)}-limen-worktrees`;
 	const requestedPath = `${worktreeRoot}/${id}`;
-	await mkdir(worktreeRoot, { recursive: true });
-	const worktree = executeWorktree(
-		repository,
-		await planWorktree({
-			root: repository,
-			requestedPath,
-			branch,
-			review: options.review,
-			jobsRoot,
-			...(workspace ? { repo: options.repo ?? "" } : {}),
-			...(options.branch ? { requestedBranch: options.branch } : {}),
-		}),
-	);
+	if (!options.workspace) await mkdir(worktreeRoot, { recursive: true });
+	const worktree = options.workspace
+		? repository
+		: executeWorktree(
+				repository,
+				await planWorktree({
+					root: repository,
+					requestedPath,
+					branch,
+					review: options.review,
+					jobsRoot,
+					...(workspace ? { repo: options.repo ?? "" } : {}),
+					...(options.branch ? { requestedBranch: options.branch } : {}),
+				}),
+			);
 	await pruneFinishedWorktrees(root, [worktree]).catch(() => {});
-	const candidate = options.review ? branchCommit(repository, branch) : undefined;
+	let candidate = options.review && !options.workspace ? branchCommit(repository, branch) : undefined;
 	const base = headCommit(worktree);
 	const jobDir = `${jobsRoot}/${id}`;
 	await mkdir(jobDir);
 	try {
+		if (options.workspace) await writeFile(`${jobDir}/workspace`, "existing\n", { flag: "wx", flush: true });
+		await acquireClaims(jobDir, options.claims, options.workspace ? repository : undefined);
+		if (options.review && options.workspace) candidate = await captureCandidate(repository, jobDir);
 		await mkdir(`${jobDir}/notify/subscribers`, { recursive: true });
-		const taskBody = loaded.raw ? loaded.bytes : candidate ? `${task.trim()}\n\nCandidate commit: ${candidate}.\n` : `${task.trim()}\n`;
+		const taskBody = loaded.raw
+			? loaded.bytes
+			: candidate
+				? `${task.trim()}\n\nCandidate ${options.workspace ? "tree (including dirty files; see candidate.json and candidate-index.patch in the job directory)" : "commit"}: ${candidate}.\n`
+				: `${task.trim()}\n`;
 		await Promise.all([
 			writeFile(`${jobDir}/task.md`, taskBody, { flag: "wx", flush: true }),
 			...(candidate ? [writeFile(`${jobDir}/candidate`, `${candidate}\n`, { flag: "wx", flush: true })] : []),
@@ -159,7 +175,10 @@ export async function spawnCommand(args: readonly string[], cwd: string): Promis
 		await writeFile(`${jobDir}/notify/ready`, "1\n", { flag: "wx", flush: true });
 		await runPrepare(jobDir, worktree, parsed.prepare ?? process.env.LIMEN_PREPARE?.trim());
 	} catch (error) {
-		await rm(jobDir, { recursive: true, force: true });
+		if (existsSync(`${jobDir}/claims.json`)) {
+			await atomicWrite(`${jobDir}/state`, "failed\n");
+			await atomicWrite(`${jobDir}/launch-not-started`, "1\n");
+		} else await rm(jobDir, { recursive: true, force: true });
 		throw error;
 	}
 	const versions = capturedVersions(engine).then((text) => writeFile(`${jobDir}/versions`, text, { flag: "wx", flush: true }));
@@ -201,6 +220,7 @@ export async function spawnCommand(args: readonly string[], cwd: string): Promis
 	let wrapperPid: number;
 	try {
 		wrapperPid = await launchWrapper(environment);
+		if (existsSync(`${jobDir}/claims.json`)) await atomicWrite(`${jobDir}/claim-pid`, `${wrapperPid}\n`);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		await versions.catch(() => {});
@@ -304,6 +324,8 @@ function executeWorktree(root: string, plan: WorktreePlan): string {
 function parseSpawnArgs(args: readonly string[]): SpawnOptions {
 	let branch: string | undefined, repo: string | undefined, label: string | undefined, model: string | undefined;
 	let provider: string | undefined, thinking: string | undefined;
+	let workspace: "existing" | undefined;
+	const claims: string[] = [];
 	let timeoutMs: number | undefined, taskFile: string | undefined, prepare: string | undefined, role: string | undefined, engine: string | undefined;
 	let review = false,
 		tab = false,
@@ -318,12 +340,20 @@ function parseSpawnArgs(args: readonly string[]): SpawnOptions {
 		else if (!positional && value === "--tab") tab = true;
 		else if (!positional && value === "--detached") detached = true;
 		else if (!positional && value.startsWith("--")) {
-			if (!["--branch", "--repo", "--label", "--model", "--provider", "--thinking", "--timeout", "--task-file", "--prepare", "--role", "--engine"].includes(value))
+			if (
+				!["--branch", "--repo", "--label", "--model", "--provider", "--thinking", "--timeout", "--task-file", "--prepare", "--role", "--engine", "--workspace", "--claim"].includes(
+					value,
+				)
+			)
 				throw new Error(`unknown spawn option ${value}`);
 			const optionValue = args[index + 1];
 			if (!optionValue) throw new Error(`${value} requires a value`);
 			index += 1;
-			if (value === "--branch") branch = once(branch, value, optionValue);
+			if (value === "--workspace") {
+				if (optionValue !== "existing") throw new Error("--workspace must be existing");
+				workspace = once(workspace, value, optionValue);
+			} else if (value === "--claim") claims.push(optionValue);
+			else if (value === "--branch") branch = once(branch, value, optionValue);
 			else if (value === "--repo") repo = once(repo, value, optionValue);
 			else if (value === "--label") label = once(label, value, normalizeLabel(optionValue));
 			else if (value === "--model") model = once(model, value, optionValue);
@@ -343,7 +373,7 @@ function parseSpawnArgs(args: readonly string[]): SpawnOptions {
 	if (review && role) throw new Error("--role and --review cannot be combined");
 	if (taskFile && task.length) throw new Error("spawn accepts a positional task or --task-file, not both");
 	if (!taskFile && (task.length === 0 || !task.join(" ").trim())) throw new Error("spawn requires task text");
-	const out: SpawnOptions = { task: task.join(" "), review, tab, detached, ...(role ? { role } : {}), ...(engine ? { engine } : {}) };
+	const out: SpawnOptions = { task: task.join(" "), review, tab, detached, claims, ...(workspace ? { workspace } : {}), ...(role ? { role } : {}), ...(engine ? { engine } : {}) };
 	if (label) out.label = label;
 	if (taskFile) out.taskFile = taskFile;
 	if (prepare) out.prepare = prepare;

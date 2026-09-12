@@ -9,6 +9,10 @@ export async function diffCommand(args: readonly string[], cwd: string): Promise
 	const query = args[0];
 	if (!query || args.length !== 1) throw new Error("diff requires exactly one job id");
 	const { id, jobDir } = await resolveJob(cwd, query);
+	if (existsSync(`${jobDir}/candidate.json`)) {
+		console.log(`dirty candidate patch: ${jobDir}/candidate.patch\nstaged candidate patch: ${jobDir}/candidate-index.patch\ncandidate identity: ${jobDir}/candidate.json`);
+		return;
+	}
 	const [base, branch, worktree, state, repo, label] = await Promise.all([
 		text(`${jobDir}/base`),
 		text(`${jobDir}/branch`),

@@ -47,8 +47,8 @@ test("init plants project-owned files and a hook stub, never role or hook copies
 	assert.equal(await readFile(join(scratch.root, ".gitignore"), "utf8"), "dist/\n/.limen/\n");
 	assert.match(await readFile(join(scratch.root, "spec/vision.md"), "utf8"), /Human-owned/);
 	assert.match(await readFile(join(scratch.root, "spec/build.md"), "utf8"), /## TRACK/);
-	assert.match(await readFile(join(scratch.root, ".agents/limen/styleguide.md"), "utf8"), /coding practice/);
-	assert.doesNotMatch(await readFile(join(scratch.root, ".agents/limen/styleguide.md"), "utf8"), /Voice and shape/);
+	assert.match(await readFile(join(scratch.root, "spec/foundation/styleguide.md"), "utf8"), /coding practice/);
+	assert.doesNotMatch(await readFile(join(scratch.root, "spec/foundation/styleguide.md"), "utf8"), /Voice and shape/);
 	assert.match(await readFile(join(scratch.root, "spec/features/_template/ticket.md"), "utf8"), /FNNN/);
 	for (const lane of ["planned", "active", "done", "dropped"]) await access(join(scratch.root, "spec/features", lane));
 	const stub = await readFile(join(scratch.root, ".pi/extensions/limen.ts"), "utf8");
@@ -114,4 +114,24 @@ test("init names a stale copy and --drop-leftovers leaves it", async (context) =
 	assert.equal(dropped.status, 0, dropped.stderr);
 	assert.doesNotMatch(dropped.stdout, /reviewer/);
 	assert.equal(await readFile(join(scratch.root, ".agents/limen/reviewer.md"), "utf8"), old);
+});
+
+test("init preserves legacy guidance and existing Foundation, notes and research", async (context) => {
+	const scratch = await scratchRepo();
+	context.after(scratch.cleanup);
+	const files = [".agents/limen/styleguide.md", "spec/foundation/execution.md", "spec/notes/context.md", "spec/research/findings.md"];
+	for (const path of files) {
+		await mkdir(join(scratch.root, path, ".."), { recursive: true });
+		await writeFile(join(scratch.root, path), `original ${path}\n`);
+	}
+	const first = limen(scratch, "init");
+	assert.equal(first.status, 0, first.stderr);
+	assert.match(first.stdout, /legacy fallback; move it to spec\/foundation\/styleguide.md/);
+	await assert.rejects(access(join(scratch.root, "spec/foundation/styleguide.md")));
+	await writeFile(join(scratch.root, "spec/foundation/styleguide.md"), "canonical\n");
+	const second = limen(scratch, "init");
+	assert.equal(second.status, 0, second.stderr);
+	assert.match(second.stdout, /spec\/foundation\/styleguide.md is authoritative/);
+	assert.equal(await readFile(join(scratch.root, "spec/foundation/styleguide.md"), "utf8"), "canonical\n");
+	for (const path of files) assert.equal(await readFile(join(scratch.root, path), "utf8"), `original ${path}\n`);
 });

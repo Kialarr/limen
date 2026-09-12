@@ -1,10 +1,10 @@
 # FNNN · What becomes true
 
-> Allocate the next unused feature number and keep it for life. The folder name is the slug and the lane it sits in is the status, so the ticket carries neither. Write for a worker in a cold worktree and an owner deciding whether this is worth doing: about three hundred words, per the speech register's Specs rules. Delete this note.
+> Allocate the next unused feature number and keep it for life. The folder name is the slug and the lane it sits in is the status, so the ticket carries neither. Write for a worker in a cold worktree and an owner deciding whether this is worth doing: use the sections that help this work, per the speech register's Specs guidance. Delete this note.
 
 ## Outcome
 
-<!-- Two to four sentences. What a user or operator can do or see afterwards; why now, if the board does not say. Product terms, no mechanism. -->
+<!-- What a user or operator can do or see afterwards; why now, if the board does not say. Product terms, no mechanism. -->
 
 ## Scope
 

@@ -35,8 +35,20 @@ export async function workspaceCommand(args: readonly string[], cwd: string): Pr
 	await initialize(resolve(cwd), false);
 }
 async function initialize(root: string, repository: boolean): Promise<void> {
+	const canonicalStyle = `${root}/spec/foundation/styleguide.md`;
+	const legacyStyle = `${root}/.agents/limen/styleguide.md`;
+	const hasLegacyStyle = await pathExists(legacyStyle);
+	const hasCanonicalStyle = await pathExists(canonicalStyle);
+	if (hasLegacyStyle) {
+		console.log(
+			hasCanonicalStyle
+				? "kept .agents/limen/styleguide.md; spec/foundation/styleguide.md is authoritative"
+				: "kept .agents/limen/styleguide.md as legacy fallback; move it to spec/foundation/styleguide.md to migrate without replacing its contents",
+		);
+	}
+	await mkdir(`${root}/.agents/limen`, { recursive: true });
 	const copies = [
-		[`${ROOT}/templates/styleguide.md`, `${root}/.agents/limen/styleguide.md`],
+		...(!hasLegacyStyle || hasCanonicalStyle ? [[`${ROOT}/templates/styleguide.md`, canonicalStyle] as const] : []),
 		[`${ROOT}/templates/spec/vision.md`, `${root}/spec/vision.md`],
 		[`${ROOT}/templates/spec/build.md`, `${root}/spec/build.md`],
 		...(repository ? [] : ([[`${ROOT}/templates/spec/workspace.md`, `${root}/spec/workspace.md`]] as const)),

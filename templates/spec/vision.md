@@ -11,3 +11,8 @@
 
 - <!-- Current stretch: outcome, why now, and material constraint. -->
 - <!-- Near-term priority or sequencing rule, if needed. -->
+
+## Project guidance
+
+- [Styleguide](foundation/styleguide.md): read before changing files.
+- Link existing Foundation guidance here with its reading condition; read only what changes this assignment’s decisions. Preserve the project’s notes and research in their existing homes.

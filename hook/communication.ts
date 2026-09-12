@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { assistantStopReason } from "../src/stream.ts";
-import { formatDrift, inheritFile, listDrift, readOptional } from "./inherit.ts";
+import { formatDrift, inheritFile, listDrift, packageRoot, readOptional } from "./inherit.ts";
 import { registerSpeak, type SpeakPiApi } from "./speak.ts";
 
 const CONTEXT_TYPE = "limen-project-context";
@@ -9,8 +9,9 @@ const BOARD_ADVISORY_LINES = 120;
 const REPLY_RULES =
 	"First line is the answer. Not `F048 is active now.` — `The change that makes spawn return in seconds (F048) is being implemented now.` Never open a reply with a feature number. Size the reply to the question.";
 const SPECS_REMINDER =
-	"[limen] Specs: a ticket is about 300 words: outcome, scope, out of scope, acceptance. No status line, no progress markers. Another feature is named by what it does, then its number: not `consumes F373`, but `builds on the shared transcript renderer (F373)`. Title is `FNNN · what becomes true`.";
-const STYLE_FILE = ".agents/limen/styleguide.md";
+	"[limen] Specs: use flexible documents sized to the work: outcome, scope, boundaries, acceptance. Preserve existing Foundation guidance, notes and research; templates are starting points, not schema or word-count gates. No status line, no progress markers. Another feature is named by what it does, then its number: not `consumes F373`, but `builds on the shared transcript renderer (F373)`. Title is `FNNN · what becomes true`.";
+const STYLE_FILE = "spec/foundation/styleguide.md";
+const LEGACY_STYLE_FILE = ".agents/limen/styleguide.md";
 const VISION_FILE = "spec/vision.md";
 const MAX_REMINDER_HEADINGS = 8;
 
@@ -89,7 +90,7 @@ function guidancePrompt(cwd: string, job: boolean): string {
 		const vision = boundFile(cwd, "spec/vision.md", "Vision");
 		if (vision) parts.push(vision);
 	}
-	const style = boundFile(cwd, ".agents/limen/styleguide.md", "Styleguide");
+	const style = boundFile(cwd, styleFile(cwd), "Styleguide");
 	if (style) parts.push(style);
 	if (!job) {
 		const digest = boardDigest(cwd);
@@ -134,6 +135,10 @@ function readRegister(cwd: string): string {
 }
 
 function readInheritedAgents(cwd: string): string {
+	if (process.env.LIMEN_INHERIT_SHOP === "1") {
+		const text = readOptional(join(packageRoot(), "templates/agents.md"));
+		return text === undefined ? "" : boundText(text, "limen/templates/agents.md", "Shop manual");
+	}
 	if (readOptional(join(cwd, "AGENTS.md")) !== undefined) return "";
 	const inherited = inheritFile(cwd, "AGENTS.md", "templates/agents.md");
 	return inherited ? boundText(inherited.text, inherited.path, "Shop manual") : "";
@@ -238,8 +243,12 @@ function isCodePath(path: string): boolean {
 	return !/\.md$/i.test(posixPath(path));
 }
 
+function styleFile(cwd: string): string {
+	return readOptional(join(cwd, STYLE_FILE)) !== undefined || readOptional(join(cwd, LEGACY_STYLE_FILE)) === undefined ? STYLE_FILE : LEGACY_STYLE_FILE;
+}
+
 function projectReminder(cwd: string, kind: "style" | "vision"): string {
-	const relative = kind === "style" ? STYLE_FILE : VISION_FILE;
+	const relative = kind === "style" ? styleFile(cwd) : VISION_FILE;
 	const label = kind === "style" ? "Styleguide" : "Vision";
 	const text = readOptional(join(cwd, relative));
 	if (text === undefined) return `[limen] ${label}: no project file at ${relative}.`;

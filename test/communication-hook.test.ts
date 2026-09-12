@@ -24,7 +24,7 @@ type Handlers = {
 	tool_result?: (event: ToolEvent, context: Context) => ToolPatch | undefined;
 };
 
-const ENV_KEYS = ["LIMEN_CONTEXT_ROOT", "LIMEN_JOB", "LIMEN_HOSTED", "LIMEN_JOB_ID", "LIMEN_TASK_FILE"] as const;
+const ENV_KEYS = ["LIMEN_INHERIT_SHOP", "LIMEN_CONTEXT_ROOT", "LIMEN_JOB", "LIMEN_HOSTED", "LIMEN_JOB_ID", "LIMEN_TASK_FILE"] as const;
 
 function extension(): { readonly handlers: Handlers; readonly events: string[] } {
 	const handlers: Handlers = {};
@@ -186,7 +186,7 @@ test("a write under spec/, an edit of code, and limen spawn recall the matching 
 	});
 	const codeText = textOf(code.content);
 	assert.match(codeText, /edited file/);
-	assert.match(codeText, /\[limen\] Styleguide: no project file at \.agents\/limen\/styleguide\.md\./);
+	assert.match(codeText, /\[limen\] Styleguide: no project file at spec\/foundation\/styleguide\.md\./);
 	assert.doesNotMatch(codeText, /TypeScript|index\.ts|one human|Inform, do not gate/);
 
 	const spawn = tool(root, {
@@ -466,3 +466,26 @@ function gitLogPair(source: string): readonly [{ readonly hash: string; readonly
 	assert.ok(latest && previous, `need two revisions of ${source}`);
 	return [latest, previous];
 }
+
+test("Foundation styleguide alone governs context and reminders when both paths exist", async (context) => {
+	const root = await projectRoot(context);
+	await coordinatorFiles(root);
+	await mkdir(join(root, "spec/foundation"), { recursive: true });
+	await writeFile(join(root, "spec/foundation/styleguide.md"), "# Canonical practice\nFoundation wins.\n");
+	const prompt = start(root).systemPrompt ?? "";
+	assert.match(prompt, /## Styleguide \(spec\/foundation\/styleguide.md\)\n# Canonical practice/);
+	assert.doesNotMatch(prompt, /Prefer small functions/);
+	const result = tool(root, { toolName: "edit", input: { path: "src/example.ts" }, content: [] });
+	assert.match(textOf(result.content), /Styleguide \(spec\/foundation\/styleguide.md\): Canonical practice/);
+});
+
+test("explicit shop inheritance adds package guidance alongside a native compact AGENTS router", async (context) => {
+	const root = await projectRoot(context);
+	await writeFile(join(root, "AGENTS.md"), "Read the project Foundation.\n");
+	assert.doesNotMatch(start(root).systemPrompt ?? "", /## Shop manual/);
+	stashEnv(context, { LIMEN_INHERIT_SHOP: "1" });
+	const prompt = start(root).systemPrompt ?? "";
+	assert.match(prompt, /## Shop manual \(limen\/templates\/agents.md\)/);
+	assert.doesNotMatch(prompt, /Read the project Foundation/);
+	assert.equal(await readFile(join(root, "AGENTS.md"), "utf8"), "Read the project Foundation.\n");
+});

@@ -145,7 +145,7 @@ A non-Git parent can hold several independent Git children. You initialize once 
 The installed `limen` is the default shop manual, role prompts, speech register, and hooks. `limen init` only creates what the project owns:
 
 ```text
-.agents/limen/styleguide.md           project coding practice
+spec/foundation/styleguide.md         project coding practice
 spec/vision.md                        durable product intent
 spec/build.md                         TRACK / NOW / NEXT / PROVEN
 spec/features/                        planned, active, done, and dropped work
