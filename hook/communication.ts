@@ -9,7 +9,7 @@ const BOARD_ADVISORY_LINES = 120;
 const REPLY_RULES =
 	"First line is the answer. Not `F048 is active now.` — `The change that makes spawn return in seconds (F048) is being implemented now.` Never open a reply with a feature number. Size the reply to the question.";
 const SPECS_REMINDER =
-	"[limen] Specs: use flexible documents sized to the work: outcome, scope, boundaries, acceptance. Preserve existing Foundation guidance, notes and research; templates are starting points, not schema or word-count gates. No status line, no progress markers. Another feature is named by what it does, then its number: not `consumes F373`, but `builds on the shared transcript renderer (F373)`. Title is `FNNN · what becomes true`.";
+	"[limen] Specs: use flexible documents sized to the work: outcome, scope, boundaries, acceptance. Preserve existing Foundation guidance, notes and research; templates are starting points, not validation or word-count gates. No status line, no progress markers. Another feature is named by what it does, then its number: not `consumes F373`, but `builds on the shared transcript renderer (F373)`. Title is `FNNN · what becomes true`.";
 const STYLE_FILE = "spec/foundation/styleguide.md";
 const LEGACY_STYLE_FILE = ".agents/limen/styleguide.md";
 const VISION_FILE = "spec/vision.md";
