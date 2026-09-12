@@ -16,7 +16,7 @@ test("architecture stays small, pure, direct, and dependency-free", async () => 
 	assert.deepEqual((await readdir(join(ROOT, "bin"))).sort(), ["limen", "tony-finish-ping.sh"]);
 	const source = await filesBelow(join(ROOT, "src"));
 	const sourceLines = (await Promise.all(source.map((path) => readFile(path, "utf8")))).reduce((sum, text) => sum + text.split("\n").length - 1, 0);
-	assert.ok(sourceLines <= 4010, `src has ${sourceLines} lines; includes bounded operator-trusted finish-turn inspection`);
+	assert.ok(sourceLines <= 4200, `src has ${sourceLines} lines; includes bounded operator-trusted finish-turn inspection and shared-checkout claims`);
 	assert.doesNotMatch(await readFile(join(ROOT, "src/job.ts"), "utf8"), /from ["']node:/);
 	assert.deepEqual((await readdir(join(ROOT, "src/commands"))).sort(), [
 		"close.ts",
@@ -27,6 +27,7 @@ test("architecture stays small, pure, direct, and dependency-free", async () => 
 		"linear.ts",
 		"open.ts",
 		"prune.ts",
+		"release.ts",
 		"spawn.ts",
 		"steer.ts",
 		"stop.ts",
@@ -45,7 +46,7 @@ test("architecture stays small, pure, direct, and dependency-free", async () => 
 	const main = await readFile(join(ROOT, "src/main.ts"), "utf8");
 	assert.match(
 		main,
-		/satisfies\s+Record<\s*\|?\s*"init"\s*\|\s*"workspace"\s*\|\s*"spawn"\s*\|\s*"continue"\s*\|\s*"diff"\s*\|\s*"steer"\s*\|\s*"stop"\s*\|\s*"wait"\s*\|\s*"jobs"\s*\|\s*"prune"\s*\|\s*"watch"\s*\|\s*"unwatch"\s*\|\s*"open"\s*\|\s*"close"\s*\|\s*"sweep"\s*\|\s*"linear"\s*\|\s*"ticket-author"\s*,?\s*Command\s*>/,
+		/satisfies\s+Record<\s*\|?\s*"init"\s*\|\s*"workspace"\s*\|\s*"spawn"\s*\|\s*"continue"\s*\|\s*"diff"\s*\|\s*"steer"\s*\|\s*"stop"\s*\|\s*"wait"\s*\|\s*"jobs"\s*\|\s*"release"\s*\|\s*"prune"\s*\|\s*"watch"\s*\|\s*"unwatch"\s*\|\s*"open"\s*\|\s*"close"\s*\|\s*"sweep"\s*\|\s*"linear"\s*\|\s*"ticket-author"\s*,?\s*Command\s*>/,
 	);
 });
 
