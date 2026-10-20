@@ -1,9 +1,10 @@
 import { execFile, spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, type FSWatcher, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { processGroupAlive } from "../src/contain.ts";
 import { derivePulse, type Pulse, producedNothing } from "../src/job.ts";
 import { reapDeadJobs } from "../src/reap.ts";
+import { registeredWakeJobs } from "../src/wake-origin.ts";
 import { registerProject } from "./seat.ts";
 
 type Context = {
@@ -46,6 +47,9 @@ export default function limenWake(pi: PiApi): void {
 	let muted = false;
 	let session: Context | undefined;
 	let jobsDir: string | undefined;
+	let originDirectory: string | undefined;
+	let exportedOrigin: string | undefined;
+	const previousOrigin = process.env.LIMEN_WAKE_ORIGIN;
 	let sessionId = "";
 	let limenDir: string | undefined;
 	let lastSweepAt = 0;
@@ -262,7 +266,8 @@ export default function limenWake(pi: PiApi): void {
 				);
 			return subscribed(job, sessionId) && !existsSync(join(job, "notify", "claims", "_fallback")) && !existsSync(join(job, "notify", "delivered", "_fallback"));
 		};
-		const message = completionWake(job, label, state, id, branch, repo, fallback);
+		const message =
+			completionWake(job, label, state, id, branch, repo, fallback) + (jobs !== jobsDir ? `\n\nJob record: ${job}\nCheckout for Limen commands: ${dirname(dirname(jobs))}` : "");
 		const routed = claimDelivery(
 			job,
 			slot,
@@ -315,7 +320,8 @@ export default function limenWake(pi: PiApi): void {
 				subscribed(job, sessionId) && !existsSync(join(job, "notify", "claims", "_advisory._fallback")) && !existsSync(join(job, "notify", "delivered", "_advisory._fallback"))
 			);
 		};
-		const message = advisoryWake(job, label, id, branch, repo, advisory, fallback);
+		const message =
+			advisoryWake(job, label, id, branch, repo, advisory, fallback) + (jobs !== jobsDir ? `\n\nJob record: ${job}\nCheckout for Limen commands: ${dirname(dirname(jobs))}` : "");
 		const routed = claimDelivery(
 			job,
 			slot,
@@ -361,10 +367,11 @@ export default function limenWake(pi: PiApi): void {
 	};
 	const confirmDeliveries = () => {
 		for (const pending of pendingDeliveries.values()) {
-			if (!pending.accepted || !pending.settled) continue;
-			if (pending.errored) releaseUncounted(pending.claim);
-			else if (pending.entered && pending.answered) confirmClaim(pending.claim, pending.delivered);
-			else if (recordUnconfirmed(pending.claim)) pending.blocked();
+			if ((!pending.accepted && !pending.entered) || !pending.settled) continue;
+			if (pending.entered) {
+				// Delivery is durable before the model runs; a successful turn is separate evidence.
+				if (!pending.errored && pending.answered) claimMarker(dirname(dirname(dirname(pending.delivered))), "handled", basename(pending.delivered));
+			} else if (recordUnconfirmed(pending.claim)) pending.blocked();
 			pendingDeliveries.delete(pending.claim);
 		}
 	};
@@ -417,6 +424,16 @@ export default function limenWake(pi: PiApi): void {
 		} catch {
 			// Display and delivery are advisory; durable state remains on disk.
 		}
+		if (originDirectory) {
+			for (const job of registeredWakeJobs(originDirectory, jobs, sessionId)) {
+				try {
+					if (!settled.has(job)) observe(dirname(job), basename(job));
+					if (deliverySettled(job, sessionId)) settled.add(job);
+				} catch {
+					// One unavailable foreign checkout must not stop other wake deliveries.
+				}
+			}
+		}
 		sweeping = false;
 	};
 	const scheduleSweep = () => {
@@ -432,6 +449,7 @@ export default function limenWake(pi: PiApi): void {
 		const root = projectRoot(context.cwd);
 		if (!root) return;
 		stopTimers();
+		watcher?.close();
 		const id = context.sessionManager.getSessionId();
 		if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id)) return;
 		const jobs = join(root, ".limen", "jobs");
@@ -446,6 +464,9 @@ export default function limenWake(pi: PiApi): void {
 		jobsDir = jobs;
 		limenDir = join(root, ".limen");
 		sessionId = id;
+		originDirectory = join(root, ".limen", "wake-jobs", id);
+		exportedOrigin = JSON.stringify({ directory: originDirectory, session: id });
+		process.env.LIMEN_WAKE_ORIGIN = exportedOrigin;
 		lastSweepAt = 0;
 		initialSweep = true;
 		footerAlive = true;
@@ -496,6 +517,7 @@ export default function limenWake(pi: PiApi): void {
 		const pending = [...pendingDeliveries.values()].find((candidate) => !candidate.entered && candidate.message === message.content);
 		if (!pending) return;
 		pending.entered = true;
+		confirmClaim(pending.claim, pending.delivered);
 		activeDeliveries.add(pending.claim);
 	});
 	pi.on("message_end", (event) => {
@@ -516,6 +538,10 @@ export default function limenWake(pi: PiApi): void {
 		sweep();
 	});
 	pi.on("session_shutdown", () => {
+		if (exportedOrigin && process.env.LIMEN_WAKE_ORIGIN === exportedOrigin) {
+			if (previousOrigin === undefined) delete process.env.LIMEN_WAKE_ORIGIN;
+			else process.env.LIMEN_WAKE_ORIGIN = previousOrigin;
+		}
 		if (!active && !statusTimer && !sweepTimer) return;
 		watcher?.close();
 		watcher = undefined;
@@ -573,6 +599,8 @@ function handoffExcerpt(job: string): string {
 	}
 	return sections.length ? `\n\n${sections.join("\n\n")}` : "";
 }
+const readyWorkReminder =
+	"After handling this result or blocker and any safe resource release, assess all work authorized for this conversation. Before ending the turn, start ready independent tasks within owner decisions, priorities, budget, pause instructions, dependencies, and checkout/resource ownership. A blocker or repair cap stops only the affected task. Update each current board item with its commitment, next action, concrete blocker or none, and resource or worker; link detailed evidence in the feature record. If nothing authorized is ready, state the dependency or decision and end the turn without polling. This reminder grants no authority over unwatched work.";
 function completionWake(job: string, label: string, state: string, id: string, branch: string, repo: string, fallback: boolean): string {
 	const location = repo ? ` in repository ${repo}` : "";
 	const task = firstSentence(text(join(job, "task.md")));
@@ -586,7 +614,7 @@ function completionWake(job: string, label: string, state: string, id: string, b
 		: empty
 			? "Inspect the job record and log/session to understand why, then resume focused work if the ticket remains open. Keep the user informed; ask only when genuine product ambiguity, a scope or risk tradeoff, or an irreversible action needs a human decision."
 			: "Inspect the job record, branch diff and commits, log/session, and relevant checks. Use the accepted ticket intent to take the next safe step: merge acceptable reviewed work, or resume focused fixes and re-review. Keep the user informed; ask only when genuine product ambiguity, a scope or risk tradeoff, or an irreversible action needs a human decision.";
-	return joinWake(lead, handoffExcerpt(job), facts, instruction);
+	return joinWake(lead, handoffExcerpt(job), facts, fallback ? instruction : `${instruction} ${readyWorkReminder}`);
 }
 function advisoryWake(job: string, label: string, id: string, branch: string, repo: string, advisory: string, fallback: boolean): string {
 	const location = repo ? ` in repository ${repo}` : "";
@@ -597,7 +625,7 @@ function advisoryWake(job: string, label: string, id: string, branch: string, re
 	const instruction = fallback
 		? "The subscribed coordinator is busy. Do not spawn, stop, or steer on this wake unless the human asks."
 		: "Inspect the job record and continue the loop; steer; or open the tab and exit if you mean the session to end.";
-	return joinWake(lead, handoffExcerpt(job), "", instruction);
+	return joinWake(lead, handoffExcerpt(job), "", fallback ? instruction : `${instruction} ${readyWorkReminder}`);
 }
 function joinWake(lead: string, excerpt: string, facts: string, instruction: string): string {
 	const parts = [lead];
@@ -723,16 +751,16 @@ function claimDelivery(job: string, slot: string, eligible: () => boolean, send:
 	try {
 		const injected = send();
 		const accept = () => {
-			writeFileSync(join(claim, "accepted"), "1\n");
+			if (existsSync(claim)) writeFileSync(join(claim, "accepted"), "1\n");
 			callbacks.accepted(claim);
 		};
 		const reject = () => {
 			callbacks.released(claim);
-			rmSync(claim, { recursive: true, force: true });
+			if (recordUnconfirmed(claim, true)) callbacks.blocked();
 			try {
-				appendFileSync(join(job, "log"), `[limen ${new Date().toISOString()}] wake injection failed; the next sweep retries\n`);
+				appendFileSync(join(job, "log"), `[limen ${new Date().toISOString()}] wake injection failed; retry delayed and bounded\n`);
 			} catch {
-				// The log is best-effort; the released claim is the durable fact.
+				// The log is best-effort; the retry or blocked claim is the durable fact.
 			}
 		};
 		if (injected instanceof Promise) injected.then(accept, reject);
@@ -740,13 +768,19 @@ function claimDelivery(job: string, slot: string, eligible: () => boolean, send:
 		return true;
 	} catch {
 		callbacks.released(claim);
-		rmSync(claim, { recursive: true, force: true });
+		if (recordUnconfirmed(claim, true)) callbacks.blocked();
 		return false;
 	}
 }
 function recoverClaim(claim: string): "released" | "blocked" | undefined {
 	try {
 		if (!existsSync(claim) || existsSync(join(claim, "blocked"))) return undefined;
+		const retryAt = Number(text(join(claim, "retry-at")));
+		if (retryAt > 0) {
+			if (Date.now() < retryAt) return undefined;
+			rmSync(claim, { recursive: true, force: true });
+			return "released";
+		}
 		if (Date.now() - statSync(claim).mtimeMs < CLAIM_STALE_MS) return undefined;
 		if (existsSync(join(claim, "accepted"))) {
 			const live = join(claim, "live");
@@ -768,7 +802,7 @@ function refreshClaim(claim: string): void {
 		// A missing claim was confirmed or recovered between the sweep and this heartbeat.
 	}
 }
-function recordUnconfirmed(claim: string): boolean {
+function recordUnconfirmed(claim: string, transportFailed = false): boolean {
 	try {
 		if (!existsSync(claim) || existsSync(join(claim, "blocked"))) return false;
 		const slot = claim.slice(claim.lastIndexOf("/") + 1);
@@ -779,14 +813,15 @@ function recordUnconfirmed(claim: string): boolean {
 		const attempts = Number(text(attemptsFile)) + 1;
 		writeFileSync(attemptsFile, `${attempts}\n`);
 		if (attempts < 2) {
-			rmSync(claim, { recursive: true, force: true });
+			if (transportFailed) writeFileSync(join(claim, "retry-at"), `${Date.now() + CLAIM_STALE_MS}\n`);
+			else rmSync(claim, { recursive: true, force: true });
 			return false;
 		}
 		writeFileSync(join(claim, "blocked"), "automatic retries stopped after two unconfirmed injections\n", { flag: "wx" });
 		const job = dirname(notify);
 		appendFileSync(
 			join(job, "log"),
-			`[limen ${new Date().toISOString()}] wake remained unconfirmed after two accepted injections; automatic retries stopped; claim retained for human recovery\n`,
+			`[limen ${new Date().toISOString()}] wake remained unconfirmed after two injections; automatic retries stopped; claim retained for human recovery\n`,
 		);
 		return true;
 	} catch {
@@ -795,7 +830,6 @@ function recordUnconfirmed(claim: string): boolean {
 }
 function confirmClaim(claim: string, delivered: string): void {
 	try {
-		if (!existsSync(join(claim, "accepted"))) return;
 		if (!existsSync(delivered)) renameSync(claim, delivered);
 		else rmSync(claim, { recursive: true, force: true });
 		const slot = delivered.slice(delivered.lastIndexOf("/") + 1);
@@ -880,21 +914,6 @@ function sessionOwnsJobs(jobs: string, session: string): boolean {
 	}
 	return false;
 }
-function releaseUncounted(claim: string): void {
-	try {
-		rmSync(claim, { recursive: true, force: true });
-	} catch {
-		// Already recovered or confirmed.
-	}
-	try {
-		appendFileSync(
-			join(dirname(dirname(dirname(claim))), "log"),
-			`[limen ${new Date().toISOString()}] wake turn ended error or aborted; claim released without counting an attempt\n`,
-		);
-	} catch {
-		// The released claim is the durable fact.
-	}
-}
 function isAdvisorySlot(slot: string): boolean {
 	return slot.startsWith("_advisory.");
 }
@@ -915,7 +934,7 @@ function projectRoot(cwd: string): string | undefined {
 }
 function notifyBookkeeping(filename: string | null): boolean {
 	if (!filename) return false;
-	return /(?:^|\/)notify\/(claims|delivered|unconfirmed|seat)(?:\/|$)/.test(filename.replaceAll("\\", "/"));
+	return /(?:^|\/)notify\/(claims|delivered|handled|unconfirmed|seat)(?:\/|$)/.test(filename.replaceAll("\\", "/"));
 }
 function eventMessage(event: unknown): { readonly role: string; readonly content: string; readonly stopReason?: string } | undefined {
 	if (!event || typeof event !== "object" || !("message" in event)) return undefined;

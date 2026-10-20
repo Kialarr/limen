@@ -22,6 +22,7 @@ import {
 import { herdrAvailable, openHostedTab, openWatchTab } from "../herdr.ts";
 import { parseDuration } from "../job.ts";
 import { liveJob } from "../reap.ts";
+import { registerWakeJob } from "../wake-origin.ts";
 import { appendLimenLog, atomicWrite, finalizeJob, launchHostedSupervisor, launchWrapper } from "../wrapper.ts";
 import { hunkBinary } from "./diff.ts";
 import { pruneFinishedWorktrees } from "./prune.ts";
@@ -137,7 +138,6 @@ export async function spawnCommand(args: readonly string[], cwd: string): Promis
 	try {
 		if (options.workspace) await writeFile(`${jobDir}/workspace`, "existing\n", { flag: "wx", flush: true });
 		await acquireClaims(jobDir, options.claims, options.workspace ? repository : undefined);
-		if (options.review && options.workspace) candidate = await captureCandidate(repository, jobDir);
 		await mkdir(`${jobDir}/notify/subscribers`, { recursive: true });
 		const taskBody = loaded.raw
 			? loaded.bytes
@@ -172,12 +172,25 @@ export async function spawnCommand(args: readonly string[], cwd: string): Promis
 		]);
 		const finishConfig = finishWebhookEnv(root, cwd);
 		if (finishConfig) await writeFile(`${jobDir}/finish-webhook-env`, `${finishConfig}\n`, { flag: "wx", mode: 0o600, flush: true });
+		registerWakeJob(jobDir, notificationSession);
 		await writeFile(`${jobDir}/notify/ready`, "1\n", { flag: "wx", flush: true });
+		if (options.review && options.workspace) {
+			await appendLimenLog(jobDir, "preparing dirty review candidate");
+			candidate = await captureCandidate(repository, jobDir);
+			await writeFile(`${jobDir}/candidate`, `${candidate}\n`, { flag: "wx", flush: true });
+			if (!loaded.raw)
+				await writeFile(
+					`${jobDir}/task.md`,
+					`${task.trim()}\n\nCandidate tree (including dirty files; see candidate.json and candidate-index.patch in the job directory): ${candidate}.\n`,
+				);
+		}
 		await runPrepare(jobDir, worktree, parsed.prepare ?? process.env.LIMEN_PREPARE?.trim());
 	} catch (error) {
 		if (existsSync(`${jobDir}/claims.json`)) {
-			await atomicWrite(`${jobDir}/state`, "failed\n");
 			await atomicWrite(`${jobDir}/launch-not-started`, "1\n");
+			const reason = `preparation failed: ${error instanceof Error ? error.message : String(error)}`;
+			await atomicWrite(`${jobDir}/result`, `${reason}\n`);
+			await finalizeJob(jobDir, "failed", reason);
 		} else await rm(jobDir, { recursive: true, force: true });
 		throw error;
 	}

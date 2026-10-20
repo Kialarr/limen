@@ -1,9 +1,21 @@
 #!/usr/bin/env node
 
+import { spawnSync } from "node:child_process";
+
 const major = Number.parseInt(process.versions.node, 10);
 if (!Number.isFinite(major) || major < 24) {
-	console.error(`limen requires Node.js 24 (this is ${process.versions.node})`);
-	process.exit(1);
+	const runtime = process.env.RKX_NODE?.trim();
+	if (!runtime || process.env.LIMEN_NODE_REEXEC === "1") {
+		console.error(`limen requires Node.js 24 or newer (this is ${process.versions.node}); set RKX_NODE to a compatible Node executable`);
+		process.exit(1);
+	}
+	const child = spawnSync(runtime, [process.argv[1], ...process.argv.slice(2)], {
+		stdio: "inherit",
+		env: { ...process.env, LIMEN_NODE_REEXEC: "1" },
+	});
+	if (child.error) console.error(`limen could not start RKX_NODE ${runtime}: ${child.error.message}`);
+	if (child.signal) process.kill(process.pid, child.signal);
+	process.exit(child.status ?? 1);
 }
 
 const { main } = await import("../src/main.ts");

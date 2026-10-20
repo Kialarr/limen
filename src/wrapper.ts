@@ -118,14 +118,25 @@ export async function runInternalJob(): Promise<void> {
 	// A detached job must not inherit the coordinator's Herdr pane.
 	for (const name of Object.keys(childEnvironment)) if (name.startsWith("HERDR_")) delete childEnvironment[name];
 	const parser = engine === "claude" ? createClaudeStreamParser() : createStreamParser();
-	const seen = { activity: "", assistant: "", stop: "" };
+	const seen = { activity: "", assistant: "", stop: "", scannedAt: 0 };
+	let queuedActivity = "";
 	const failLog = (error: unknown) => appendLimenLog(jobDir, `log write failed: ${error instanceof Error ? error.message : String(error)}`).catch(() => {});
 	const apply = (events: readonly StreamEvent[]) => {
+		// Token deltas repeat "think" thousands of times. Coalesce before queuing disk
+		// work, including across stdout chunks; tools and final answers remain lossless.
+		const relevant = events.filter((event) => {
+			if (event.kind === "tool") queuedActivity = "tool";
+			if (event.kind !== "activity") return true;
+			if (event.name === queuedActivity) return false;
+			queuedActivity = event.name;
+			return true;
+		});
+		if (!relevant.length) return;
 		pending = pending
 			.then(() =>
 				recordEvents(
 					jobDir,
-					events,
+					relevant,
 					() => {
 						tools += 1;
 						if (tools >= toolCallCap()) exhaust(`tool-call cap reached after ${tools} calls`);
@@ -162,6 +173,7 @@ export async function runInternalJob(): Promise<void> {
 	if (graceTimer) clearTimeout(graceTimer);
 	apply(parser.flush());
 	await pending;
+	await recordChangedFiles(jobDir).catch(failLog);
 	if (seen.stop) {
 		await atomicWrite(`${jobDir}/stop-reason`, `${seen.stop}\n`).catch(() => {});
 		await appendLimenLog(jobDir, `assistant ${seen.stop}`).catch(() => {});
@@ -212,18 +224,25 @@ export async function recordCommits(jobDir: string): Promise<void> {
 	const commits = commitList(worktree, base, branch);
 	if (commits !== undefined) await atomicWrite(`${jobDir}/commits`, commits ? `${commits}\n` : "");
 }
-async function recordEvents(jobDir: string, events: readonly StreamEvent[], nextCount: () => number, seen: { activity: string; assistant: string; stop: string }): Promise<void> {
+async function recordEvents(
+	jobDir: string,
+	events: readonly StreamEvent[],
+	nextCount: () => number,
+	seen: { activity: string; assistant: string; stop: string; scannedAt: number },
+): Promise<void> {
 	for (const event of events) {
 		if (event.kind === "tool") {
 			seen.activity = "tool";
 			await atomicWrite(`${jobDir}/last-tool`, `${event.name}\n`);
 			await atomicWrite(`${jobDir}/activity`, "tool\n");
 			await atomicWrite(`${jobDir}/tool-calls`, `${nextCount()}\n`);
-			await recordChangedFiles(jobDir);
+			if (Date.now() - seen.scannedAt >= 2_000) {
+				seen.scannedAt = Date.now();
+				await recordChangedFiles(jobDir);
+			}
 			await appendFile(`${jobDir}/log`, event.detail ? `${event.name} ${event.detail}\n` : `${event.name}\n`);
 		} else if (event.kind === "activity") {
 			await atomicWrite(`${jobDir}/activity`, `${event.name}\n`);
-			await recordChangedFiles(jobDir);
 			if (seen.activity !== event.name) await appendFile(`${jobDir}/log`, `${(seen.activity = event.name)}\n`);
 		} else if (event.kind === "session") {
 			await atomicWrite(`${jobDir}/claude-session`, `${event.id}\n`);
@@ -235,7 +254,14 @@ async function recordEvents(jobDir: string, events: readonly StreamEvent[], next
 	}
 }
 async function recordChangedFiles(jobDir: string): Promise<void> {
-	const count = changedFileCount(await textFile(`${jobDir}/worktree`));
+	let count: number | undefined;
+	try {
+		count = changedFileCount(await textFile(`${jobDir}/worktree`));
+	} catch (error) {
+		// The file count is display metadata. A failed scan must not discard the
+		// remaining stream events (especially the final assistant answer).
+		await appendLimenLog(jobDir, `changed-file scan failed: ${error instanceof Error ? error.message : String(error)}`);
+	}
 	if (count === undefined) await rm(`${jobDir}/changed-files`, { force: true });
 	else await atomicWrite(`${jobDir}/changed-files`, `${count}\n`);
 }

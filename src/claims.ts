@@ -65,14 +65,15 @@ export async function releaseClaims(jobDir: string): Promise<void> {
 	}
 }
 
-function git(root: string, args: string[], index?: string, input?: Buffer): Buffer {
+function git(root: string, args: string[], index?: string, input?: Buffer, timeout?: number): Buffer {
 	const result = spawnSync("git", args, {
 		cwd: root,
 		env: { ...process.env, ...(index ? { GIT_INDEX_FILE: index } : {}) },
 		maxBuffer: 64 * 1024 * 1024,
+		...(timeout ? { timeout, killSignal: "SIGKILL" as const } : {}),
 		...(input ? { input } : {}),
 	});
-	if (result.status !== 0) throw new Error(`candidate git ${args[0]} failed: ${result.stderr?.toString().trim() || result.error?.message}`);
+	if (result.status !== 0) throw new Error(`candidate git ${args[0]} failed: ${result.error?.message || result.stderr?.toString().trim()}`);
 	return result.stdout;
 }
 export function currentBranch(root: string): string {
@@ -82,29 +83,38 @@ export function currentBranch(root: string): string {
 // A Git tree retains binary, deleted and untracked candidate files without modifying HEAD or the user's index.
 // Ignored files are deliberately outside a Git review candidate. Two reads detect concurrent ordinary writes.
 export async function captureCandidate(root: string, jobDir: string): Promise<string> {
+	const budget = Number(process.env.LIMEN_CAPTURE_TIMEOUT_MS ?? 180_000);
+	if (!Number.isFinite(budget) || budget <= 0) throw new Error("LIMEN_CAPTURE_TIMEOUT_MS must be positive");
+	const deadline = Date.now() + budget;
+	const candidateGit = (root: string, args: string[], index?: string) => {
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) throw new Error("candidate capture timed out");
+		return git(root, args, index, undefined, Math.max(1, Math.ceil(remaining)));
+	};
 	const temporary = await mkdtemp(join(tmpdir(), "limen-candidate-"));
 	try {
 		const index = join(temporary, "index");
-		const head = git(root, ["rev-parse", "HEAD"]).toString().trim();
-		const staged = git(root, ["diff", "--cached", "--binary", "--no-ext-diff", "HEAD"]);
+		const head = candidateGit(root, ["rev-parse", "HEAD"]).toString().trim();
+		const staged = candidateGit(root, ["diff", "--cached", "--binary", "--no-ext-diff", "HEAD"]);
 		const snapshot = () => {
-			git(root, ["read-tree", "HEAD"], index);
-			const names = Buffer.concat([git(root, ["ls-tree", "-r", "--name-only", "-z", "HEAD"]), git(root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"])]);
-			const paths: Buffer[] = [];
-			let start = 0;
-			for (let end = names.indexOf(0); end !== -1; end = names.indexOf(0, start)) {
-				const path = names.subarray(start, end);
-				if (path.toString() !== ".limen" && !path.toString().startsWith(".limen/")) paths.push(names.subarray(start, end + 1));
-				start = end + 1;
-			}
-			if (paths.length) git(root, ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], index, Buffer.concat(paths));
-			return git(root, ["write-tree"], index).toString().trim();
+			candidateGit(root, ["read-tree", "HEAD"], index);
+			// A directory pathspec lets Git handle ignored files and tracked deletions.
+			// Enumerating HEAD paths instead can explicitly select now-ignored paths.
+			candidateGit(root, ["add", "-A", "--", "."], index);
+			// Restore runtime paths only in the disposable index. An explicit negative
+			// add pathspec still makes Git reject ignored .limen directories.
+			candidateGit(root, ["reset", "-q", "HEAD", "--", ".limen"], index);
+			return candidateGit(root, ["write-tree"], index).toString().trim();
 		};
 		const tree = snapshot();
-		if (tree !== snapshot() || !staged.equals(git(root, ["diff", "--cached", "--binary", "--no-ext-diff", "HEAD"])) || head !== git(root, ["rev-parse", "HEAD"]).toString().trim())
+		if (
+			tree !== snapshot() ||
+			!staged.equals(candidateGit(root, ["diff", "--cached", "--binary", "--no-ext-diff", "HEAD"])) ||
+			head !== candidateGit(root, ["rev-parse", "HEAD"]).toString().trim()
+		)
 			throw new Error("candidate changed during capture; stop external writers before review");
 		await writeFile(join(jobDir, "candidate-index.patch"), staged, { flag: "wx", flush: true });
-		await writeFile(join(jobDir, "candidate.patch"), git(root, ["diff", "--binary", "--no-ext-diff", head, tree]), { flag: "wx", flush: true });
+		await writeFile(join(jobDir, "candidate.patch"), candidateGit(root, ["diff", "--binary", "--no-ext-diff", head, tree]), { flag: "wx", flush: true });
 		await writeFile(
 			join(jobDir, "candidate.json"),
 			JSON.stringify({ head, tree, scope: "Git tracked and non-ignored untracked files; .limen excluded", stagedPatch: "candidate-index.patch" }),

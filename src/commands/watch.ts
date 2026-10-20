@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { limenRoot } from "../git.ts";
 import { resolveJob } from "../lookup.ts";
+import { registerWakeJob } from "../wake-origin.ts";
 export const watchCommand = (args: readonly string[], cwd: string): Promise<void> => changeSubscriptions(args, cwd, true);
 export const unwatchCommand = (args: readonly string[], cwd: string): Promise<void> => changeSubscriptions(args, cwd, false);
 async function changeSubscriptions(args: readonly string[], cwd: string, watching: boolean): Promise<void> {
@@ -27,6 +28,7 @@ async function setSubscription(job: string, session: string, watching: boolean):
 	}
 	await mkdir(`${job}/notify/subscribers`, { recursive: true });
 	await exclusiveWrite(marker, `${new Date().toISOString()}\n`);
+	registerWakeJob(job, session);
 	await exclusiveWrite(`${job}/notify/ready`, "1\n");
 }
 async function exclusiveWrite(path: string, content: string): Promise<void> {

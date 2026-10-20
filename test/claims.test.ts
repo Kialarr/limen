@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -192,3 +192,87 @@ test("existing checkout spawn keeps dirty work, captures review and requires exp
 	assert.equal(fresh.status, 0, fresh.stderr);
 	await waitForState(scratch.root, onlyJobId(fresh.stdout), "done");
 });
+
+test("candidate includes tracked paths inside now-ignored directories without adding ignored untracked files", async () => {
+	const f = await fixture();
+	try {
+		const repo = await f.job("repo"),
+			job = await f.job("job");
+		git(repo, "init", "-q");
+		git(repo, "config", "user.email", "fixture@example.invalid");
+		git(repo, "config", "user.name", "Fixture");
+		await mkdir(join(repo, ".idea"));
+		await writeFile(join(repo, ".idea", "tracked"), "base\n");
+		await writeFile(join(repo, ".idea", "deleted"), "remove\n");
+		git(repo, "add", ".");
+		git(repo, "commit", "-qm", "initial");
+		await writeFile(join(repo, ".idea", "tracked"), "staged\n");
+		git(repo, "add", ".idea/tracked");
+		await writeFile(join(repo, ".idea", "tracked"), "unstaged\n");
+		await rm(join(repo, ".idea", "deleted"));
+		await writeFile(join(repo, ".gitignore"), ".idea/\nUserSettings/\n");
+		await writeFile(join(repo, ".idea", "ignored-new"), "not in candidate\n");
+		await mkdir(join(repo, "UserSettings"));
+		await writeFile(join(repo, "UserSettings", "ignored-new"), "not in candidate\n");
+		await mkdir(join(repo, ".limen"));
+		await writeFile(join(repo, ".limen", "job-state"), "not in candidate\n");
+		await writeFile(join(repo, "new-file"), "included\n");
+		const index = await readFile(join(repo, ".git", "index"));
+		const tree = await captureCandidate(repo, job);
+		assert.equal(git(repo, "show", `${tree}:.idea/tracked`), "unstaged\n");
+		assert.equal(git(repo, "show", `${tree}:new-file`), "included\n");
+		assert.deepEqual(git(repo, "ls-tree", "-r", "--name-only", tree).trim().split("\n"), [".gitignore", ".idea/tracked", "new-file"]);
+		assert.deepEqual(await readFile(join(repo, ".git", "index")), index);
+		assert.match(await readFile(join(job, "candidate-index.patch"), "utf8"), /\+staged/);
+	} finally {
+		await f.close();
+	}
+});
+
+for (const failure of ["error", "timeout"] as const) {
+	test(`review capture ${failure} retains a terminal job subscribed to its coordinator`, async (context) => {
+		const { scratchRepo, limenWithEnv } = await import("./scratch.ts");
+		const scratch = await scratchRepo();
+		context.after(scratch.cleanup);
+		const run = (...args: string[]) =>
+			limenWithEnv(
+				scratch,
+				{
+					LIMEN_CLAIMS_DIR: join(scratch.fakeBin, "claims"),
+					PI_SESSION_ID: "capture-coordinator",
+					...(failure === "timeout" ? { LIMEN_CAPTURE_TIMEOUT_MS: "800" } : {}),
+				},
+				...args,
+			);
+		assert.equal(run("init").status, 0);
+		const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
+		assert.ok(realGit.startsWith("/"));
+		const fakeGit = join(scratch.fakeBin, "git");
+		await writeFile(
+			fakeGit,
+			`#!/bin/sh\nif [ "$1" = "read-tree" ]; then ${failure === "timeout" ? "exec sleep 30" : 'echo "fixture snapshot failure" >&2; exit 42'}; fi\nexec '${realGit.replaceAll("'", "'\\''")}' "$@"\n`,
+		);
+		await chmod(fakeGit, 0o755);
+		const failed = run("spawn", "--workspace", "existing", "--review", "--detached", "--label", "navigation review", "inspect navigation");
+		assert.notEqual(failed.status, 0);
+		const expectedError = failure === "timeout" ? /ETIMEDOUT|timed out/ : /fixture snapshot failure/;
+		assert.match(failed.stderr, expectedError);
+		const ids = await readdir(join(scratch.root, ".limen", "jobs"));
+		assert.equal(ids.length, 1);
+		const job = join(scratch.root, ".limen", "jobs", ids[0] ?? "");
+		const read = (name: string) => readFile(join(job, name), "utf8");
+		assert.equal((await read("state")).trim(), "failed");
+		assert.equal((await read("launch-not-started")).trim(), "1");
+		assert.equal((await read("label")).trim(), "navigation review");
+		assert.match(await read("task.md"), /inspect navigation/);
+		assert.equal((await read("origin-session")).trim(), "capture-coordinator");
+		assert.equal((await read("notify/ready")).trim(), "1");
+		assert.ok(Number.isFinite(Date.parse((await read("notify/subscribers/capture-coordinator")).trim())));
+		assert.ok(Number.isFinite(Date.parse((await read("finished-at")).trim())));
+		assert.match(await read("result"), expectedError);
+		assert.match(await read("log"), expectedError);
+		await assert.rejects(read("pid"), { code: "ENOENT" });
+		await assert.rejects(readFile(join(scratch.root, "pi-args.json")), { code: "ENOENT" });
+		assert.equal(run("release", ids[0] ?? "").status, 0);
+	});
+}
